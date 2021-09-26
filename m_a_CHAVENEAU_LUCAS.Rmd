@@ -1,0 +1,687 @@
+---
+title: |
+  | Projet Marketing et Analyse
+  | Sesmestre 8
+author: "Lucas Chaveneau"
+header-includes:
+  - \usepackage{float}
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 3
+    keep_tex: yes
+    df_print: kable
+    dev: png
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, echo=FALSE}
+knitr::opts_chunk$set(dev='pdf', echo = FALSE, warning=FALSE,xtable.comment = FALSE, sanitize=TRUE, tidy.opts=list(width.cutoff=40), tidy=TRUE,table.placement = "H", fig.align="center",message=FALSE,results="asis")
+options(tinytex.verbose = TRUE)
+```
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(kableExtra)
+library(ggfortify)
+library(stargazer)
+library(dplyr)
+library(lmtest)
+library(ROCR)
+library(pROC)
+library(ggfortify)
+library(rsample)
+library(caret)
+```
+
+
+```{r}
+data<-read_xlsx("Concours.xlsx")
+```
+
+```{r, eval=F}
+sum(is.na(data))
+```
+
+
+```{r, eval=FALSE}
+str(data)
+```
+
+```{r, include=FALSE}
+data$sexe<-as.factor(data$sexe)
+data$nationalite<- as.factor(data$nationalité)
+data$serie_de_bac <- as.factor(data$`série de bac`)
+data$mention_de_bac <- as.factor (data$`mention de bac`)
+data$formation_suivie<- as.factor(data$`formation suivie`)
+data$mention_obtenue <- as.factor (data$`mention obtenue`)
+data$admissibilite <- as.factor (data$`admissi-bilité`)
+data$annee<-data$Année
+data$numero_observation <- data$`Numéro observation`
+data$note_epreuves_ecrites<-data$`note épreuves écrites`
+
+data<-data[,-c(1,2,4,6,7,8,9,10,11)]
+
+str(data)
+```
+
+```{r}
+
+# Fonction pour faire des belles confusions matrix
+draw_confusion_matrix <- function(cm, class1, class2, title) {
+  layout(matrix(c(1,1,2)))
+  par(mar=c(2,2,2,2))
+  plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
+  title(title, cex.main=1.3)
+  # create the matrix 
+  rect(150, 430, 240, 370, col="#69b3a2")
+  text(195, 435, class1, cex=1.2)
+  rect(250, 430, 340, 370, col="#404080")
+  text(295, 435, class2, cex=1.2)
+  text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)
+  text(245, 450, 'Actual', cex=1.3, font=2)
+  rect(150, 305, 240, 365, col="#404080")
+  rect(250, 305, 340, 365, col="#69b3a2")
+  text(140, 400, class1, cex=1.2, srt=90)
+  text(140, 335, class2, cex=1.2, srt=90)
+  
+  # add in the cm results 
+  res <- as.numeric(cm$table)
+  text(195, 400, res[1], cex=1.6, font=2, col='white')
+  text(195, 335, res[2], cex=1.6, font=2, col='white')
+  text(295, 400, res[3], cex=1.6, font=2, col='white')
+  text(295, 335, res[4], cex=1.6, font=2, col='white')
+  
+  # add in the specifics 
+  plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "Details", xaxt='n', yaxt='n')
+  text(10, 85, names(cm$byClass[1]), cex=1.2, font=2)
+  text(10, 70, round(as.numeric(cm$byClass[1]), 3), cex=1.2)
+  text(30, 85, names(cm$byClass[2]), cex=1.2, font=2)
+  text(30, 70, round(as.numeric(cm$byClass[2]), 3), cex=1.2)
+  text(50, 85, names(cm$byClass[5]), cex=1.2, font=2)
+  text(50, 70, round(as.numeric(cm$byClass[5]), 3), cex=1.2)
+  text(70, 85, names(cm$byClass[6]), cex=1.2, font=2)
+  text(70, 70, round(as.numeric(cm$byClass[6]), 3), cex=1.2)
+  text(90, 85, names(cm$byClass[7]), cex=1.2, font=2)
+  text(90, 70, round(as.numeric(cm$byClass[7]), 3), cex=1.2)
+  
+  # add in the accuracy information 
+  text(50, 35, names(cm$overall[1]), cex=1.4, font=2)
+  text(50, 20, round(as.numeric(cm$overall[1]), 3), cex=1.3)
+}  
+```
+
+\newpage
+
+# Problématique
+
+La département d'économie propose un parcours de formation en 3 ans débutant en L3 et conduisant à un Master. Sont éligibles les titulaires d'une deuxième année de licence de sciences économiques (SEG) ou de mathématiques (MIASHS) de même que les détenteurs d'un DUT ou d'un BTS relevant du domaine de l'économie ou de la gestion, sous réserve d'être reçu à un concours comportant des épreuves d'admissibilité et des épreuves orales d'admission.
+
+Les épreuves d'admissibilité comportent une dissertation sur un thème d'actualité, un test de connaissance en économie, ainsi qu'une série d'exercices de mathématiques, de statistiques et de comptabilité. Pour être déclaré admissible, il faut obtenir à ces épreuves une note moyenne supérieure à 12. A peu prés la moitié des 300 à 350 candidats qui se présentent chaque année à ce concours satisfont cette exigence.
+
+La direction du département souhaiterait pouvoir mettre à disposition des étudiants, sur son site web, un système automoatisé d'évaluation synthétique de leurs chances de réussite tenant compte du profil de chacun. Elle se laisse le choix de la manière dont elle formulera ce pronostic sur son site mais vous demande de fournir, pour chaque profil, une estimation de la probabilité d'être déclaré admissible
+
+\newpage
+
+# Statistique descriptive
+
+Nous allons dés à présent étudier les variables de notre base de données selon l'admissibilité au concours.
+
+## La variable `annee`
+
+Cette variable représente l'année du concours. 
+
+Sur cette partie nous allons tous simplement regarder le taux de réussite selon l'année du concours.
+
+```{r}
+liste=c(-1,-2,-3,-4,-5,-6)
+result_non=NULL
+result_oui=NULL
+result=NULL
+taux_reussite=NULL
+j=0
+for (i in liste){
+  j=j+1
+  result_non[j]=sum(data[data$annee==i,]$admissibilite=="non")
+  result_oui[j]=sum(data[data$annee==i,]$admissibilite=="oui")
+  result[j]=result_non[j]+result_oui[j]
+  taux_reussite[j]=result_oui[j]/result[j]
+}
+
+tablo<-as.table(matrix(c(result_non,result_oui, result), nrow=3, byrow=T))
+colnames(tablo)<-c("1 ans", "2 ans", "3 ans", "4 ans", "5 ans", "6 ans")
+rownames(tablo)<- c("Oui", "Non", "Total d'inscrit au concours")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position")) %>% add_header_above(c(" "=1, "Concours passé" = 6))
+
+```
+
+Nous remarquons que cela ne suit pas une tendance. Le nombre de personnes refusé reste sensiblement le même au fil des années.
+
+Essayons de regarder au plus prêt le taux de réussite des différents concours.
+
+```{r, fig.height=3, fig.width=5}
+grap_annee<-ggplot()+
+  geom_line(aes(x=liste,y=taux_reussite), color="green")+
+  labs(title = "Taux de reussite selon l'année du concours") +  labs(y= "Taux de reussite") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14)) +scale_x_continuous(name="Annee", breaks=c(-6, -5, -4, -3, -2, -1), labels=c("6", "5", "4", "3", "2", "1"))
+grap_annee
+```
+
+Nous avions un plus haut taux de réussite aux 6éme et 5éme année avant celle-ci. La dernière année assume être celle qui à le plus faible taux de réussite.
+
+
+## La variable `sexe`.
+
+Essayons de regarder si le sexe de l'individu influe sur le taux d'admissibilité.
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$sexe=="F",]$admissibilite=="non"),
+sum(data[data$sexe=="F",]$admissibilite=="oui"),
+sum(data[data$sexe=="F",]$admissibilite=="oui")/(sum(data[data$sexe=="F",]$admissibilite=="non")+ sum(data[data$sexe=="F",]$admissibilite=="oui")),
+sum(data[data$sexe=="H",]$admissibilite=="non"),
+sum(data[data$sexe=="H",]$admissibilite=="oui"),
+sum(data[data$sexe=="H",]$admissibilite=="oui")/(sum(data[data$sexe=="H",]$admissibilite=="non")+ sum(data[data$sexe=="H",]$admissibilite=="oui"))),3),nrow=2, byrow=T))
+
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("Femme","Homme")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Nous ne voyons pas de grandes différences entre les taux de réussite des femmes ou des hommes. Le sexe de l'individu n'influe pas empiriquement sur la réussite de l'éxamen
+
+## La variable `nationalite`.
+
+Cette variable représente si l'individu est étranger au lieu du concours ou bien s'il est résident au lieu de concours. Essayons de regarder si cette variable a une incidence sur le taux de réussite.
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$nationalite=="étranger",]$admissibilite=="non"),
+sum(data[data$nationalite=="étranger",]$admissibilite=="oui"),
+sum(data[data$nationalite=="étranger",]$admissibilite=="oui")/(sum(data[data$nationalite=="étranger",]$admissibilite=="non")+ sum(data[data$nationalite=="étranger",]$admissibilite=="oui")),
+sum(data[data$nationalite=="français",]$admissibilite=="non"),
+sum(data[data$nationalite=="français",]$admissibilite=="oui"),
+sum(data[data$nationalite=="français",]$admissibilite=="oui")/(sum(data[data$nationalite=="français",]$admissibilite=="non")+ sum(data[data$nationalite=="français",]$admissibilite=="oui"))),3),nrow=2, byrow=T))
+
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("Etranger","Français")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Les français sont beaucoup plus présents que les étrangers à ce concours. Il n'y a pas de différences notables entre les taux de réussites. Le fait d'être étranger ou non, ne change pas empiriquement notre taux de réussite.
+
+## La variable `serie_de_bac`
+
+Nous savons pertinemment que les séries de bac les plus représentées dans ce concours sont *S* ou *ES*. Essayons de voir si cela influe sur le taux de réussite de ce concours. 
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$serie_de_bac=="ES",]$admissibilite=="non"),
+sum(data[data$serie_de_bac=="ES",]$admissibilite=="oui"),
+sum(data[data$serie_de_bac=="ES",]$admissibilite=="oui")/(sum(data[data$serie_de_bac=="ES",]$admissibilite=="non")+ sum(data[data$serie_de_bac=="ES",]$admissibilite=="oui")),
+sum(data[data$serie_de_bac=="S",]$admissibilite=="non"),
+sum(data[data$serie_de_bac=="S",]$admissibilite=="oui"),
+sum(data[data$serie_de_bac=="S",]$admissibilite=="oui")/(sum(data[data$serie_de_bac=="S",]$admissibilite=="non")+ sum(data[data$serie_de_bac=="S",]$admissibilite=="oui"))),3),nrow=2, byrow=T))
+
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("ES","S")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Il semble que les personnes ayant obtenu un bac de type *économique et social* réussisent mieux que les personnes ayant un bac *scientifique*.
+
+## La variable `mention_de_bac`
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$mention_de_bac=="P",]$admissibilite=="non"),
+sum(data[data$mention_de_bac=="P",]$admissibilite=="oui"),
+sum(data[data$mention_de_bac=="P",]$admissibilite=="oui")/(sum(data[data$mention_de_bac=="P",]$admissibilite=="non")+ sum(data[data$mention_de_bac=="P",]$admissibilite=="oui")),
+sum(data[data$mention_de_bac=="AB",]$admissibilite=="non"),
+sum(data[data$mention_de_bac=="AB",]$admissibilite=="oui"),
+sum(data[data$mention_de_bac=="AB",]$admissibilite=="oui")/(sum(data[data$mention_de_bac=="AB",]$admissibilite=="non")+ sum(data[data$mention_de_bac=="AB",]$admissibilite=="oui")),
+sum(data[data$mention_de_bac=="B",]$admissibilite=="non"),
+sum(data[data$mention_de_bac=="B",]$admissibilite=="oui"),
+sum(data[data$mention_de_bac=="B",]$admissibilite=="oui")/(sum(data[data$mention_de_bac=="B",]$admissibilite=="non")+ sum(data[data$mention_de_bac=="B",]$admissibilite=="oui")),
+sum(data[data$mention_de_bac=="TB",]$admissibilite=="non"),
+sum(data[data$mention_de_bac=="TB",]$admissibilite=="oui"),
+sum(data[data$mention_de_bac=="TB",]$admissibilite=="oui")/(sum(data[data$mention_de_bac=="TB",]$admissibilite=="non")+ sum(data[data$mention_de_bac=="TB",]$admissibilite=="oui"))),3),nrow=4, byrow=T))
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("Passable","Assez bien", "Bien", "très bien")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Nous pouvons remarquer que le groupe le plus présent sont des personnes ayant eu leur bac avec mention *assez bien*. Bien évidemment, les personnes ayant eu leur bac avec mention *bien* ou *très bien* sont moins présents.
+
+Le taux de réussite augmente si nous avons eu une meilleur mention au bac.
+
+## La variable `retard`
+
+Cette variable compte l'écart à l'âge normal pour ce niveau d'étude.
+
+Essayons de voir si plusieurs facteurs qui nous a poussé à redoubler ou à retarder notre passage aux études sont significatifs dans l'admissibilité de ce concours. 
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$retard=="3",]$admissibilite=="non"),
+sum(data[data$retard=="3",]$admissibilite=="oui"),
+sum(data[data$retard=="3",]$admissibilite=="oui")/(sum(data[data$retard=="3",]$admissibilite=="non")+ sum(data[data$retard=="3",]$admissibilite=="oui")),
+sum(data[data$retard=="2",]$admissibilite=="non"),
+sum(data[data$retard=="2",]$admissibilite=="oui"),
+sum(data[data$retard=="2",]$admissibilite=="oui")/(sum(data[data$retard=="2",]$admissibilite=="non")+ sum(data[data$retard=="2",]$admissibilite=="oui")),
+sum(data[data$retard=="1",]$admissibilite=="non"),
+sum(data[data$retard=="1",]$admissibilite=="oui"),
+sum(data[data$retard=="1",]$admissibilite=="oui")/(sum(data[data$retard=="1",]$admissibilite=="non")+ sum(data[data$retard=="1",]$admissibilite=="oui")),
+sum(data[data$retard=="0",]$admissibilite=="non"),
+sum(data[data$retard=="0",]$admissibilite=="oui"),
+sum(data[data$retard=="0",]$admissibilite=="oui")/(sum(data[data$retard=="0",]$admissibilite=="non")+ sum(data[data$retard=="0",]$admissibilite=="oui")),
+sum(data[data$retard=="-1",]$admissibilite=="non"),
+sum(data[data$retard=="-1",]$admissibilite=="oui"),
+sum(data[data$retard=="-1",]$admissibilite=="oui")/(sum(data[data$retard=="-1",]$admissibilite=="non")+ sum(data[data$retard=="-1",]$admissibilite=="oui"))),3),nrow=5, byrow=T))
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("3 année de retard","2 année de retard", "1 année de retard", "Aucun retard", "Une année d'avance")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Nous pouvons donc supposer empiriquement que le fait d'avoir pris du retard dans les études nous offre moins de capacités/chances de réussite.
+
+De plus, le taux de réussite est plutôt élevé pour les personnes avec une année d'avance par apport à l'âge normal pour ce niveau d'étude. 
+
+
+## La variable `formation_suivie`
+
+Cette variable désigne la formation post-bac de l'individu. Ses modalités sont :
+
+* **BTS** : Brevet de technicien supérieur.
+
+* **DUT** : Diplôme universitaire en technologie. 
+
+* **MIASHS** : L2 mathématiques et informatique appliquées aux sciences humaines et sociales.
+
+* **SEG** : L2 économie et gestion. 
+
+En voici le descriptif en fonction de l'admissibilité : 
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$formation_suivie=="BTS",]$admissibilite=="non"),
+sum(data[data$formation_suivie=="BTS",]$admissibilite=="oui"),
+sum(data[data$formation_suivie=="BTS",]$admissibilite=="oui")/(sum(data[data$formation_suivie=="BTS",]$admissibilite=="non")+ sum(data[data$formation_suivie=="BTS",]$admissibilite=="oui")),
+sum(data[data$formation_suivie=="DUT",]$admissibilite=="non"),
+sum(data[data$formation_suivie=="DUT",]$admissibilite=="oui"),
+sum(data[data$formation_suivie=="DUT",]$admissibilite=="oui")/(sum(data[data$formation_suivie=="DUT",]$admissibilite=="non")+ sum(data[data$formation_suivie=="DUT",]$admissibilite=="oui")),
+sum(data[data$formation_suivie=="MIASHS",]$admissibilite=="non"),
+sum(data[data$formation_suivie=="MIASHS",]$admissibilite=="oui"),
+sum(data[data$formation_suivie=="MIASHS",]$admissibilite=="oui")/(sum(data[data$formation_suivie=="MIASHS",]$admissibilite=="non")+ sum(data[data$formation_suivie=="MIASHS",]$admissibilite=="oui")),
+sum(data[data$formation_suivie=="SEG",]$admissibilite=="non"),
+sum(data[data$formation_suivie=="SEG",]$admissibilite=="oui"),
+sum(data[data$formation_suivie=="SEG",]$admissibilite=="oui")/(sum(data[data$formation_suivie=="SEG",]$admissibilite=="non")+ sum(data[data$formation_suivie=="SEG",]$admissibilite=="oui"))),3),nrow=4, byrow=T))
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("BTS","DUT", "MIASHS", "SEG")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position")) %>% add_header_above(c("Type de diplome"=1, " "=3))
+```
+
+Les personnes en formation *MIASHS* ont le plus haut taux de réussite, suivies par les *SEG*.
+
+Les *BTS* admettent le plus faible taux de réussite. 
+
+## La variable `mention_obtenue`
+
+Cette variable détaille les mentions obtenues lors de la formation post-bac.
+
+```{r}
+tablo<-as.table(matrix(round(c(sum(data[data$mention_obtenue=="P",]$admissibilite=="non"),
+sum(data[data$mention_obtenue=="P",]$admissibilite=="oui"),
+sum(data[data$mention_obtenue=="P",]$admissibilite=="oui")/(sum(data[data$mention_obtenue=="P",]$admissibilite=="non")+ sum(data[data$mention_obtenue=="P",]$admissibilite=="oui")),
+sum(data[data$mention_obtenue=="AB",]$admissibilite=="non"),
+sum(data[data$mention_obtenue=="AB",]$admissibilite=="oui"),
+sum(data[data$mention_obtenue=="AB",]$admissibilite=="oui")/(sum(data[data$mention_obtenue=="AB",]$admissibilite=="non")+ sum(data[data$mention_obtenue=="AB",]$admissibilite=="oui")),
+sum(data[data$mention_obtenue=="B",]$admissibilite=="non"),
+sum(data[data$mention_obtenue=="B",]$admissibilite=="oui"),
+sum(data[data$mention_obtenue=="B",]$admissibilite=="oui")/(sum(data[data$mention_obtenue=="B",]$admissibilite=="non")+ sum(data[data$mention_obtenue=="B",]$admissibilite=="oui")),
+sum(data[data$mention_obtenue=="TB",]$admissibilite=="non"),
+sum(data[data$mention_obtenue=="TB",]$admissibilite=="oui"),
+sum(data[data$mention_obtenue=="TB",]$admissibilite=="oui")/(sum(data[data$mention_obtenue=="TB",]$admissibilite=="non")+ sum(data[data$mention_obtenue=="TB",]$admissibilite=="oui"))),3),nrow=4, byrow=T))
+
+colnames(tablo)<-c("Non admis", "Admis", "Taux de réussite")
+rownames(tablo)<- c("Passable","Assez bien", "Bien", "très bien")
+tablo %>% kable(caption = "Fréquence des réussites au concours") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Comme pour les mentions du bac, plus nous augmentons notre mention, plus nous réussissons au concours. 
+
+## La variable `note_epreuves_ecrites`.
+
+Nous n'allons pas décrire les notes des épreuves écrites en fonction de l'admissibilité. Elles sont en effet colinéaires, puisque l'admissibilité dépend de la note aux épreuves écrites.
+
+# Droite de régression linéaire
+
+Dans cette partie nous allons réaliser une droite de régression linéaire sur la variable `note_epreuves_ecrites` par la méthode des moindres carrés ordinaire. La variable `admissibilité` est très corrélée à la variable à prédire, nous allons donc l'enlever de nos variables discriminantes. La variable `annee` n'étant pas significatif, nous décidons de l'enlever (l'année du concours n'influe pas sur les notes de l'écrit). De plus, elle ne représente pas les caractéristiques de l'individu, il serait non pertinent de la rajouter.
+
+```{r}
+reg1<-lm(note_epreuves_ecrites~sexe+as.factor(retard)+nationalite+serie_de_bac+mention_de_bac+formation_suivie+mention_obtenue, data=data)
+```
+
+```{r, eval = F}
+summary(reg1)
+```
+
+Le tableau synthétisant les coefficients se trouve dans la **table 12** en annexe.
+
+Les paramètres estimés semblent cohérents avec notre analyse descriptive. Par exemple pour la variable `retard` : 
+
+* Le retard $-1$, décrivant si l'individu est en avance d'un an par apport à l'age normal de l'année d'étude, est la catégorie de référence. Il est donc normal que les coefficients des autres modalités de la variable `retard` soient négatifs. Puisqu'en effet nous avions remarqué un plus haut taux de réussite pour les personnes en avance d'un an.
+
+Les coefficients associés aux variables `formation_suivi`, `mention_obtenue` et `retard` sont significatifs. 
+
+Pour la variable `mention_de_bac`, seulement le coefficient associé à la modalité *passable* est significatif. Seulement la modalité passable a une influence sur la note aux épreuves écrites. 
+
+Il aurait été pertinent de rajouter une relation entre `mention_obtenue` et `formation_suivi` puis entre `mention_du_bac` et `serie_de_bac` puisque ces variables sont liées. C'est à dire qu'une mention *très bien* pour un *BTS* ne vaut pas la même chose qu'une mention *très bien* dans un *MIASHS*.
+
+# Modèle à probabilité linéaire.
+
+A présent nous allons estimer par la méthode des moindres carrés ordinaire, la variable `admissibilite`. La variable `admissibilite` n'est pas une variable quantitative, elle est dichotomique. Ce fait est un problème puisque la méthode des moindres carrés ordinaire n'est pas adaptée pour une variable dépendante dichotomique pour plusieurs points :
+
+* L'hypothèse des normalités des résidus n'est plus tenue.
+
+* Nous sommes en présence d'hétéroscédasticité.
+
+* Les probabilités estimées peuvent être comprise entre $]-\infty ; \infty[$.
+
+Comme la question précédente, nous risquons d'avoir des résultats érronnés si nous n'enlevons pas la colinéarité entre `note_epreuves_ecrites` et `admissibilite`. C'est à dire l'omission de `note_epreuves_ecrites` ici.
+
+Nous devons au préalable recoder la variable `admissibilite` en numérique sinon cela ne fonctionnera pas.
+
+Nous avons aussi enlevé la variable `annee` le coefficient associé à cette variable n'était pas significatif.
+
+```{r}
+data$admissibilite<-ifelse(data$admissibilite=="oui", 1,0)
+#data$admissibilite<-recode_factor(data$admissibilite, "oui"=1, "non"=0)
+#data$admissibilite<-as.numeric(data$admissibilite) # 1 2 
+```
+
+
+```{r}
+reg2<-lm(admissibilite~sexe+nationalite+as.factor(retard)+serie_de_bac+mention_de_bac+formation_suivie+mention_obtenue, data=data)
+```
+
+```{r, eval = F}
+summary(reg2)
+```
+
+Les coefficients estimés se trouve dans la **table 13** en annexe.
+
+Les significativités des coefficients sont sensiblement les mêmes qu'à la régression linéaire sur la variable `note_epreuves_ecrites`
+
+Nous devons essayer de corriger l'hétéroscédasticité. Detectons là premièrement, par un test de white ou un test de Breusch Pagan :
+
+Dans le test de Breush pagan :
+
+$$ 
+\begin{cases}
+      H_0 : V(\epsilon_i)=\sigma^2 \\ 
+      H_1 : V(\epsilon_i)=\sigma^2_i
+\end{cases}
+$$
+
+```{r, eval =F}
+test_hetero<-bptest(reg2)
+test_hetero$p.value
+```
+
+Notre $p_{value} < 0,05$, l'hypothèse $H_0$ est rejetée, c'est à dire que nous sommes en présence d'hétéroscédasticité.
+
+Pour corriger l'hétéroscédasticité nous devons passer par le modèle des moindres carrés quasi généralisés (MCQG).
+
+Pour pouvoir faire ce modèle, nous devons pondérer chaque observation par l'inverse de $\sqrt{V(\epsilon_i|X_i)}$.
+
+```{r, eval =F}
+sum(fitted(reg2)>1)
+sum(fitted(reg2)<0)
+```
+
+Cependant nous sommes en présence de certaines valeurs prédites $< 0$. Ceci est un vrai problème car l'estimation de la variance de l'erreur est : $\hat{V}(\epsilon_i)=\hat{p_i}(1-\hat{p_i})$. Si $\hat{p_i} < 0$ alors $\hat{V}(\epsilon_i) < 0$ et une variance négative est impossible. Il aurait été de même $\forall \hat{p_i} > 1$ mais nous n'en n'avons pas. Nous les remplacerons par des **NA** et non par des $0$ puisqu'il n'est pas possible de calculer $\sqrt{0}$.
+
+```{r}
+pred <- fitted(reg2)
+pred<-ifelse(pred < 0, NA, pred)
+```
+
+```{r}
+ponder<-pred*(1-pred)
+ponder <- 1/ponder
+```
+
+```{r}
+reg3<-lm(admissibilite~sexe+nationalite+as.factor(retard)+serie_de_bac+mention_de_bac+formation_suivie+mention_obtenue, data=data, weights=ponder)
+## La racine se fait automatiquement dans weights
+```
+
+```{r, eval=FALSE}
+summary(reg3)
+```
+
+Les nouveaux coefficients estimés se trouve dans la **table 14** en annexe.
+
+La variable `serie_de_bac` est devenue significative, ainsi que la modalité *TB* de la variable `mention_de_bac`. Il n'y a pas d'autres différences notables entre la significativité des coefficients.
+
+La valeur des coefficients restent logiques.
+
+Nous avons aussi un meilleur $R^2$ même s'il n'est pas un excellent indicateur de la qualité du modèle.
+
+# Modèle logit
+
+Dans cette partie nous découperons notre base de données en deux :
+
+* L'une pour créer des données d'entrainement : le modèle va apprendre de ces données.
+
+* L'autre pour tester le modèle.
+
+```{r}
+set.seed((1))
+data_split <- data %>% initial_split(prop = 2/3)
+data_test <- data_split %>% testing()
+data_train <- data_split %>% training()
+```
+
+## Création de notre modèle :
+
+Nous ferons comme les modèles précédent :
+
+* Nous enlevons la variable `note_epreuves_ecrites` pour cause de colinéarité.
+
+* Nous enlevons la variable `annee` car son coefficient n'est pas significativement différent de $0$.
+
+```{r}
+reg4 <- glm(admissibilite~sexe+nationalite+as.factor(retard)+serie_de_bac+mention_de_bac+formation_suivie+mention_obtenue, data=data_test,family = "binomial") #Pour variable dichotomique
+```
+
+```{r, eval=FALSE}
+summary(reg4)
+```
+
+La tableau synthétisant la régression logistique se retouve dans la **table 15** en annexe.
+
+Seules les variables complètes `sexe` et `nationalité` ont des coefficients non significativements différents de $0$. Nous pouvions le pressentir dans notre analyse descriptive. Les conclusions sur la significativité des coefficients restent sensiblement les mêmes qu'au modèle à probabilité linéaire. 
+
+Les coefficients ont des signes cohérents.
+
+Dans ce modèle **logit** nous pouvons dire que la mention de bac *passable* a une influence négative par apport à la catégorie de référence *assez bien*.
+
+Nous pouvons aussi affirmer que le fait d'avoir pas ou des années de retard par apport à l'age normal de l'année d'étude a une influence négative par rapport au fait d'avoir un an d'avance. 
+
+## Rapport de chances
+
+```{r}
+round(cbind(OR = exp(coef(reg4)), exp(confint(reg4))),2) %>% kable(caption = "Rapport de chances et intervalle de confiance") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Grâce à ce tableau nous pouvons dire que dans ce modèle :
+
+* Une personne, qui a 3 ans de retard, a 16 fois ($\frac{1}{0.06}$) moins de chances, par apport à quelqu'un qui a un an d'avance, de réussir au concours.
+
+* Une personne, qui a fait un *DUT*, a $1,95$ fois plus de chances de réussir le concours qu'une personne qui a fait un *BTS*.
+
+* Une personne qui a eu la mention *très bien* dans leurs études supérieurs a $4.08$ fois plus de chances de réussir au concours qu'une personne qui a eu la mention *assez bien*
+
+* Du fait de la significativité du coefficient associé a la modalité *homme* de la variable `sexe`, nous pouvons dire qu'être un homme ne donne pas plus de chances de réussir le concours.
+
+## Ajustement du modèle 
+
+Nous devons à présent tester la significativité de notre modèle en prenant un modèle contraint avec juste une constante et un modèle non contraint.
+
+$$ 
+\begin{cases}
+      H_0 : \beta_0 = \beta_1 = \ldots = \beta_j=0\\ 
+      H_1 : \exists j \ \ \text{tel que} \ \  \beta_j \ne 0
+\end{cases}
+$$
+
+```{r}
+reg_test <- update(reg4, formula. = .~1)
+test_adm <- lrtest(reg_test, reg4)
+stargazer(test_adm, type='latex', title="Résultats du test de la significativité d'un modèle", header=F, table.placement = "H", label="test_ajust")
+```
+
+La $p_{value}$ est inférieure à $\alpha=0.05$, nous rejetons l'hypothèse $H_0$. Notre modèle est meilleur qu'un modèle contraint.
+
+## Courbe ROC
+
+```{r, fig.height=3, fig.width=5}
+courbe<- roc(data_test$admissibilite, predict(reg4, data_test))
+ggroc(courbe, col="blue") +geom_abline(intercept=1, slope=1, col="red") + labs(x="Spécificité", y = "Sensitivité", title="Courbe ROC : modèle logit")
+```
+
+La courbe ROC représente le taux de bonnes prédictions sur la modalité *non* par apport au taux de bonnes prédictions *oui*, si on change le seuil d'acceptation.
+
+La courbe ROC est une bonne mesure de la qualité d'un modèle. L'AUC est l'air sous la courbe ROC, il faut qu'elle soit maximale.
+
+## Matrice de confusion
+
+Passons à présent à la matrice de confusion
+
+```{r, fig.height=4, fig.width=6}
+prediction <- as.factor(ifelse(predict(reg4,data_test)>0.5, 1, 0))
+matrice_logit<- confusionMatrix(data = prediction, reference = data_test$admissibilite %>% as.vector() %>% as.factor(), positive = "1")
+matrice_logit %>% draw_confusion_matrix(title = "Matrice de confusion sur l'admissibilité", class1 = "non", class2 = "oui")
+
+
+```
+
+Notre modèle **logit** admet un taux d'erreur de $1-0,743=0,257$. Il estime mauvaisement dans l'ordre de $25\%$
+
+Il a estimé $54$ *oui* alors qu'elle était des *non*.
+
+# Modèle probit
+
+Le modèle probit suppose que les termes d'erreurs du modèle suivent une loi logistique alors que le modèle probit suppose que ses termes d'erreurs suivent une loi normal.
+
+Les modèles probit et logit sont liés. En effet, les coefficients associés aux variables discriminantes suivent cette relation :
+
+$$\hat{\beta}_j^{logit} = \frac{\pi}{\sqrt{3}} \hat{\beta}_j^{probit} $$
+
+Nous allons à présent estimer la variable `admissibilite` par un modèle probit.  
+
+```{r}
+reg5 <- glm(admissibilite~sexe+nationalite+as.factor(retard)+serie_de_bac+mention_de_bac+formation_suivie+mention_obtenue, data=data_test, family = "binomial"(link = "probit"))
+```
+
+```{r, eval=FALSE}
+summary(reg5)
+```
+
+Le tableau synthétisant les résultats du modèle se trouve dans **table 16** en annexe
+
+Nous pouvons remarquer qu'il y a moins de coefficients, associés aux variables discriminantes, significatifs.
+
+Les signes des coefficients restent logiques.
+
+## Courbe ROC 
+
+```{r, fig.height=3, fig.width=5}
+courbe<- roc(data_test$admissibilite, predict(reg5, data_test))
+ggroc(courbe, col="blue") +geom_abline(intercept=1, slope=1, col="red") + labs(x="Spécificité", y = "Sensitivité", title="Courbe ROC : modèle probit")
+```
+
+La courbe ROC est sensiblement identique à la courbe ROC du modèle logit.
+
+## Matrice de confusion
+
+```{r, fig.height=4, fig.width= 6}
+prediction <- as.factor(ifelse(predict(reg5,data_test)>0.5, 1, 0))
+matrice_probit<- confusionMatrix(data = prediction, reference = data_test$admissibilite %>% as.vector() %>% as.factor(), positive = "1")
+matrice_probit %>% draw_confusion_matrix(title = "Matrice de confusion sur l'admissibilité", class1 = "non", class2 = "oui")
+```
+
+# Quel modèle choisir ?
+
+Dans un premier temps, il ne serait pas pertinent de choisir les modèles à probabilité linéaire, même si nous avons essayé de corriger l'hétéroscedasticité par la méthode des MCQG. En effet, le modèle à probabilité linéaire va à l'encontre de plusieurs hypothèses vues précédemment. 
+
+Nous allons donc comparer les erreurs sur ces deux types de modèles : probit et logit.
+
+```{r}
+prediction <- as.factor(ifelse(predict(reg4,data_test)>0.5, 1, 0))
+realite<-data_test$admissibilite
+tablo<-table(realite,prediction)
+
+err_logit<-c(sum(realite!=prediction)/nrow(data_test), 1-(tablo[1]/(tablo[3]+tablo[1])), 1-(tablo[4]/(tablo[2]+tablo[4])))
+
+prediction <- as.factor(ifelse(predict(reg5,data_test)>0.5, 1, 0))
+realite<-data_test$admissibilite
+tablo<-table(realite,prediction)
+
+err_probit<-c(sum(realite!=prediction)/nrow(data_test), 1-(tablo[1]/(tablo[3]+tablo[1])), 1-(tablo[4]/(tablo[2]+tablo[4])))
+
+tablo<-t(rbind(err_logit,err_probit))
+rownames(tablo)<-c("Erreur total", "Erreur sur non", "Erreur sur oui")
+colnames(tablo)<-c("Logit", "Probit")
+
+tablo %>% kable(caption = "Erreurs selon le modèle") %>% 
+  kable_styling(full_width = F, position = "center",latex_options = c("striped", "condensed", "HOLD_position"))
+```
+
+Les deux modèles admettent le même taux d'erreur total. Sur l'ensemble des données ils font le même nombre d'erreur de prédiction. Cependant, ces erreurs se focalisent pas sur la même modalité.
+
+Le modèle logit admet une erreur de $17\%$ sur les *non* alors que probit admet une erreur de $9.5\%$. Le modèle logit fait plus d'erreur sur la modalité *non*. Au contraire, logit admet une erreur de $34\%$ sur les *oui* contre $40\%$ pour le modèle probit. Notre modèle logit estime mieux les *oui* que notre modèle probit.
+ 
+Du fait de la quasi égalité de nos erreurs total, le modèle choisi dépendra de ce que nous voulons :
+
+* Si nous voulons bien prédire les *non*, il faudrat privilégier le modèle probit.
+
+* Si nous voulons bien prédire les *oui*, nous choisirons donc le modèle logit. 
+
+# Annexe 
+
+```{r}
+stargazer(reg1,header=FALSE,type="latex",font.size = "footnotesize",title="modèle de régression linéaire", label="summary_reg1", table.placement = "H")
+```
+
+```{r}
+stargazer(reg2,header=FALSE,type="latex",font.size = "footnotesize",title="modèle de régression linéaire par MCQG",table.placement = "H", label="summary_reg2")
+```
+
+```{r}
+stargazer(reg3,header=F,type="latex",font.size = "footnotesize",title="modèle à probabilité linéaire",table.placement = "H",label="summary_reg3")
+```
+
+```{r}
+summary_reg4<-stargazer(reg5, header=F,type="latex",font.size = "footnotesize",title="modèle logit",table.placement = "H", label="summary_reg4")
+```
+
+```{r}
+summary_reg5<-stargazer(reg5, header=F,type="latex",font.size = "footnotesize",title="modèle probit",table.placement = "H", label="summary_reg5")
+```
+
